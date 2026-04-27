@@ -27,13 +27,37 @@ agent-lingo codex --debug-protocol -- --model gpt-5.4
 
 ## Configuration
 
+Agent Lingo reads a global JSON config file from:
+
+```text
+$XDG_CONFIG_HOME/agent-lingo/config.json
+```
+
+If `XDG_CONFIG_HOME` is not set, the default path is `~/.config/agent-lingo/config.json`.
+
+Example:
+
+```json
+{
+  "userLanguage": "ko",
+  "agentLanguage": "en",
+  "codexBin": "codex",
+  "translatorModel": "gpt-5.4",
+  "stateDir": "/Users/you/.local/state/agent-lingo",
+  "debugProtocol": false
+}
+```
+
+Use `--config <path>` or `AGENT_LINGO_CONFIG` to load a different config file.
+
 - `AGENT_LINGO_USER_LANGUAGE`: BCP-47 language tag for the user's input and displayed translations.
 - `AGENT_LINGO_AGENT_LANGUAGE`: BCP-47 language tag sent to the agent.
 - `AGENT_LINGO_CODEX_BIN`: Codex binary to run. Defaults to `codex`.
 - `AGENT_LINGO_TRANSLATOR_MODEL`: optional model override for translation sessions.
 - `AGENT_LINGO_STATE_DIR`: state directory. Defaults to `$XDG_STATE_HOME/agent-lingo`.
+- `AGENT_LINGO_CONFIG`: global config file path.
 
-CLI flags override environment variables.
+Precedence is CLI flags, then environment variables, then global config, then defaults.
 
 ## Current Scope
 

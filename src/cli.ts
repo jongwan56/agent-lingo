@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { runCodexAdapter } from "./adapters/codex/index.js";
-import { parseCliArgs } from "./core/config.js";
+import { resolveCliArgs } from "./core/config.js";
 import { AgentLingoError } from "./core/types.js";
 
 const version = "0.1.0";
 
 export async function main(argv = process.argv.slice(2), env = process.env): Promise<number> {
-  const parsed = parseCliArgs(argv, env, version);
+  const parsed = resolveCliArgs(argv, env, version);
   if (parsed.kind === "help" || parsed.kind === "version") {
     process.stdout.write(`${parsed.text}\n`);
     return 0;
