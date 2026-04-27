@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
 import { runCodexAdapter } from "./adapters/codex/index.js";
 import { resolveCliArgs } from "./core/config.js";
 import { runConfigCommand } from "./core/configCommand.js";
+import { isMainModule } from "./core/entrypoint.js";
 import { AgentLingoError } from "./core/types.js";
 
-const version = "0.1.0";
+const version = "0.1.1";
 
 export async function main(argv = process.argv.slice(2), env = process.env): Promise<number> {
   const parsed = resolveCliArgs(argv, env, version);
@@ -20,7 +20,7 @@ export async function main(argv = process.argv.slice(2), env = process.env): Pro
   return runCodexAdapter(parsed.config);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().then(
     (exitCode) => process.exit(exitCode),
     (error: unknown) => {

@@ -1,6 +1,6 @@
 {
   "name": "agent-lingo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Language proxy for coding-agent CLIs.",
   "type": "module",
   "license": "MIT",

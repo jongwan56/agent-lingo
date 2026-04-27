@@ -238,7 +238,7 @@ class AppServerTranslationSession {
 
       const session = new AppServerTranslationSession(options, state, proc, ws, "");
       await session.request("initialize", {
-        clientInfo: { name: "agent-lingo-translator", version: "0.1.0" },
+        clientInfo: { name: "agent-lingo-translator", version: "0.1.1" },
         capabilities: null,
       });
       ws.send(JSON.stringify({ method: "initialized" }));
