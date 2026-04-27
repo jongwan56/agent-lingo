@@ -34,6 +34,24 @@ class MockTranslator implements Translator {
   }
 }
 
+class HangingTranslator implements Translator {
+  async translate(_direction: TranslationDirection, _text: string): Promise<string> {
+    return new Promise(() => undefined);
+  }
+
+  async translateStream(
+    _direction: TranslationDirection,
+    _text: string,
+    _onDelta: TranslationDeltaHandler,
+  ): Promise<string> {
+    return new Promise(() => undefined);
+  }
+
+  async getTranslatorThreadIds(): Promise<Set<string>> {
+    return new Set();
+  }
+}
+
 describe("Codex websocket proxy", () => {
   test("transforms client turn text before forwarding upstream", async () => {
     const upstreamPort = await findOpenPort();
@@ -142,6 +160,79 @@ describe("Codex websocket proxy", () => {
     const completedParams = objectValue(received[3]?.params);
     const completedItem = objectValue(completedParams.item);
     expect(stringValue(completedItem.text)).toBe("Hello.\n\n---\n\nuser:Hello.");
+
+    client.terminate();
+    await proxy.close();
+    await closeServer(upstream);
+  });
+
+  test("warns and forwards turn completion when streaming translation stalls", async () => {
+    const upstreamPort = await findOpenPort();
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
+    const upstreamConnection = new Promise<WebSocket>((resolve) => {
+      upstream.once("connection", resolve);
+    });
+
+    const proxyPort = await findOpenPort();
+    const proxy = await startProxy({
+      listenPort: proxyPort,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      translator: new HangingTranslator(),
+      debug: false,
+      translationTimeoutMs: 10,
+    });
+
+    const client = new WebSocket(proxy.url);
+    await onceOpen(client);
+    const upstreamSocket = await upstreamConnection;
+
+    const received: JsonObject[] = [];
+    const gotMessages = new Promise<void>((resolve) => {
+      client.on("message", (data) => {
+        const message = parseObject(data.toString("utf8"));
+        received.push(message);
+        if (message.method === "turn/completed") {
+          resolve();
+        }
+      });
+    });
+
+    upstreamSocket.send(
+      JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId: "thread",
+          turnId: "turn",
+          item: {
+            type: "agentMessage",
+            id: "item",
+            text: "Hello.",
+          },
+        },
+      }),
+    );
+    upstreamSocket.send(
+      JSON.stringify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread",
+          turn: { id: "turn", status: "completed", items: [], error: null },
+        },
+      }),
+    );
+
+    await gotMessages;
+    expect(received.map((message) => message.method)).toEqual([
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/completed",
+      "turn/completed",
+    ]);
+    const warningDelta = objectValue(received[1]?.params);
+    expect(stringValue(warningDelta.delta)).toContain("Translation unavailable");
+    const completedParams = objectValue(received[2]?.params);
+    const completedItem = objectValue(completedParams.item);
+    expect(stringValue(completedItem.text)).toContain("Hello.\n\n---\n\nTranslation unavailable");
 
     client.terminate();
     await proxy.close();

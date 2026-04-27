@@ -26,6 +26,9 @@ type TranslatorOptions = {
   debug: boolean;
 };
 
+const translatorTurnTimeoutMs = 60_000;
+const translatorRequestTimeoutMs = 30_000;
+
 export class CodexTranslator implements Translator {
   private statePromise: Promise<TranslatorState>;
   private translationQueue: Promise<unknown> = Promise.resolve();
@@ -69,7 +72,7 @@ export class CodexTranslator implements Translator {
     return this.enqueueTranslation(async () => {
       try {
         const session = await this.ensureStreamSession();
-        return await session.translate(text, onDelta);
+        return await withTimeout(session.translate(text, onDelta), translatorTurnTimeoutMs, "translator turn");
       } catch (error) {
         await this.closeStreamSession();
         throw error;
@@ -199,9 +202,10 @@ export class CodexTranslator implements Translator {
 
 class AppServerTranslationSession {
   private nextId = 1;
-  private readonly pendingResponses = new Map<string | number, (message: JsonRpcMessage) => void>();
+  private readonly pendingResponses = new Map<string | number, PendingResponse>();
   private readonly pendingNotifications: JsonRpcMessage[] = [];
-  private readonly notificationWaiters: Array<(message: JsonRpcMessage) => boolean> = [];
+  private readonly notificationWaiters: NotificationWaiter[] = [];
+  private closedError: Error | undefined;
 
   private constructor(
     private readonly options: TranslatorOptions,
@@ -210,7 +214,20 @@ class AppServerTranslationSession {
     private readonly ws: WebSocket,
     private threadId: string,
   ) {
-    ws.on("message", (data) => this.handleMessage(parseJsonRpcFrame(data.toString("utf8"))));
+    ws.on("message", (data) => {
+      try {
+        this.handleMessage(parseJsonRpcFrame(data.toString("utf8")));
+      } catch (error) {
+        this.closeWithError(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    ws.on("close", () => this.closeWithError(new Error("translator app-server websocket closed")));
+    ws.on("error", (error) => this.closeWithError(error instanceof Error ? error : new Error(String(error))));
+    proc.on("close", (code, signal) => {
+      const reason = signal ? `signal ${signal}` : `exit code ${String(code)}`;
+      this.closeWithError(new Error(`translator app-server closed with ${reason}`));
+    });
+    proc.on("error", (error) => this.closeWithError(error instanceof Error ? error : new Error(String(error))));
   }
 
   static async create(options: TranslatorOptions, state: TranslatorState): Promise<AppServerTranslationSession> {
@@ -347,25 +364,47 @@ class AppServerTranslationSession {
 
   private request(method: string, params: JsonObject): Promise<JsonRpcMessage> {
     const id = this.nextId++;
-    const promise = new Promise<JsonRpcMessage>((resolve) => this.pendingResponses.set(id, resolve));
-    this.ws.send(JSON.stringify({ id, method, params }));
+    if (this.closedError) {
+      return Promise.reject(this.closedError);
+    }
+    const promise = new Promise<JsonRpcMessage>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingResponses.delete(id);
+        reject(new Error(`${method} timed out after ${translatorRequestTimeoutMs}ms`));
+      }, translatorRequestTimeoutMs);
+      this.pendingResponses.set(id, { resolve, reject, timeout });
+    });
+    this.ws.send(JSON.stringify({ id, method, params }), (error) => {
+      if (!error) {
+        return;
+      }
+      const pending = this.pendingResponses.get(id);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pendingResponses.delete(id);
+        pending.reject(error);
+      }
+    });
     return promise;
   }
 
   private handleMessage(message: JsonRpcMessage): void {
     if (message.id !== undefined && message.id !== null) {
-      const resolve = this.pendingResponses.get(message.id);
-      if (resolve) {
+      const pending = this.pendingResponses.get(message.id);
+      if (pending) {
         this.pendingResponses.delete(message.id);
-        resolve(message);
+        clearTimeout(pending.timeout);
+        pending.resolve(message);
         return;
       }
     }
 
     for (let index = 0; index < this.notificationWaiters.length; index += 1) {
       const waiter = this.notificationWaiters[index];
-      if (waiter(message)) {
+      if (waiter.accept(message)) {
         this.notificationWaiters.splice(index, 1);
+        clearTimeout(waiter.timeout);
+        waiter.resolve(message);
         return;
       }
     }
@@ -374,17 +413,74 @@ class AppServerTranslationSession {
   }
 
   private nextNotification(): Promise<JsonRpcMessage> {
+    if (this.closedError) {
+      return Promise.reject(this.closedError);
+    }
     const existing = this.pendingNotifications.shift();
     if (existing) {
       return Promise.resolve(existing);
     }
-    return new Promise<JsonRpcMessage>((resolve) => {
-      this.notificationWaiters.push((message) => {
-        resolve(message);
-        return true;
-      });
+    return new Promise<JsonRpcMessage>((resolve, reject) => {
+      const waiter: NotificationWaiter = {
+        resolve,
+        reject,
+        timeout: setTimeout(() => {
+          const index = this.notificationWaiters.indexOf(waiter);
+          if (index !== -1) {
+            this.notificationWaiters.splice(index, 1);
+          }
+          reject(new Error(`translator notification timed out after ${translatorRequestTimeoutMs}ms`));
+        }, translatorRequestTimeoutMs),
+        accept: () => true,
+      };
+      this.notificationWaiters.push(waiter);
     });
   }
+
+  private closeWithError(error: Error): void {
+    if (this.closedError) {
+      return;
+    }
+    this.closedError = error;
+    for (const [id, pending] of this.pendingResponses) {
+      clearTimeout(pending.timeout);
+      this.pendingResponses.delete(id);
+      pending.reject(error);
+    }
+    for (const waiter of this.notificationWaiters.splice(0)) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(error);
+    }
+  }
+}
+
+type PendingResponse = {
+  resolve(message: JsonRpcMessage): void;
+  reject(error: Error): void;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+type NotificationWaiter = {
+  accept(message: JsonRpcMessage): boolean;
+  resolve(message: JsonRpcMessage): void;
+  reject(error: Error): void;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 export function getCodexVersion(codexBin: string): string | null {

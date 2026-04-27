@@ -12,6 +12,7 @@ type ProxyOptions = {
   upstreamUrl: string;
   translator: Translator;
   translationCache?: TranslationCache;
+  translationTimeoutMs?: number;
   debug: boolean;
 };
 
@@ -73,6 +74,7 @@ export async function startProxy(options: ProxyOptions): Promise<RunningProxy> {
             userInputRequests,
             pendingTranslationTurns,
             (message) => sendWhenOpen(client, JSON.stringify(message), false),
+            options.translationTimeoutMs,
             options.debug,
           );
           for (const frame of transformed) {
@@ -172,6 +174,7 @@ async function transformServerFrame(
   userInputRequests: UserInputRequestContexts,
   pendingTranslationTurns: Map<string, Promise<void>>,
   emit: (message: JsonRpcMessage) => void,
+  translationTimeoutMs: number | undefined,
   debug: boolean,
 ): Promise<string[]> {
   const message = parseJsonRpcFrame(frame);
@@ -193,6 +196,7 @@ async function transformServerFrame(
         existing ? Promise.allSettled([existing, pending]).then(() => undefined) : pending,
       );
     },
+    translationTimeoutMs,
   });
   return (Array.isArray(transformed) ? transformed : [transformed]).map((entry) => JSON.stringify(entry));
 }

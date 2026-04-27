@@ -14,6 +14,7 @@ export type ServerTransformOptions = {
   emit?: (message: JsonRpcMessage) => void;
   registerPendingTranslation?: (threadId: string, turnId: string, pending: Promise<void>) => void;
   translationCache?: TranslationCache;
+  translationTimeoutMs?: number;
 };
 
 type UserInputRequestContext = {
@@ -26,6 +27,7 @@ type QuestionContext = {
 };
 
 const translationDivider = "\n\n---\n\n";
+const defaultTranslationTimeoutMs = 65_000;
 
 export async function transformClientToServer(
   message: JsonRpcMessage,
@@ -487,6 +489,7 @@ async function translateCompletedTextItem(
       emit: options.emit,
       registerPendingTranslation: options.registerPendingTranslation,
       translationCache: options.translationCache,
+      translationTimeoutMs: options.translationTimeoutMs,
     });
   }
 
@@ -523,16 +526,24 @@ function streamCompletedTextItemTranslation(
   threadId: string,
   turnId: string,
   options: Required<Pick<ServerTransformOptions, "emit" | "registerPendingTranslation">> &
-    Pick<ServerTransformOptions, "translationCache">,
+    Pick<ServerTransformOptions, "translationCache" | "translationTimeoutMs">,
 ): JsonRpcMessage[] {
   const deltaMethod = item.type === "plan" ? "item/plan/delta" : "item/agentMessage/delta";
+  const translationTimeoutMs = options.translationTimeoutMs ?? defaultTranslationTimeoutMs;
+  let acceptTranslationOutput = true;
 
   const pending = (async () => {
     try {
       await nextTick();
-      const translated = await translateWithOptionalStreaming(translator, item.text as string, (delta) => {
-        options.emit(createDelta(deltaMethod, threadId, turnId, itemId, delta));
-      });
+      const translated = await withTimeout(
+        translateWithOptionalStreaming(translator, item.text as string, (delta) => {
+          if (acceptTranslationOutput) {
+            options.emit(createDelta(deltaMethod, threadId, turnId, itemId, delta));
+          }
+        }),
+        translationTimeoutMs,
+      );
+      acceptTranslationOutput = false;
       if (!translated.trim() || translated.trim() === String(item.text).trim()) {
         options.emit(createCompletedMessage(message, params, item, String(item.text)));
         return;
@@ -540,8 +551,9 @@ function streamCompletedTextItemTranslation(
       await options.translationCache?.setAgentToUser(item.text as string, translated, { threadId, turnId, itemId });
       options.emit(createCompletedMessage(message, params, item, `${item.text}${translationDivider}${translated}`));
     } catch (error) {
+      acceptTranslationOutput = false;
       const detail = error instanceof Error ? error.message : String(error);
-      const fallback = `Translation failed: ${detail}`;
+      const fallback = `Translation unavailable: ${detail}`;
       options.emit(createDelta(deltaMethod, threadId, turnId, itemId, fallback));
       options.emit(createCompletedMessage(message, params, item, `${item.text}${translationDivider}${fallback}`));
     }
@@ -572,6 +584,22 @@ async function translateWithOptionalStreaming(
 
 function nextTick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 function createDelta(method: string, threadId: string, turnId: string, itemId: string, delta: string): JsonRpcMessage {
