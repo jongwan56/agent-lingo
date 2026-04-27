@@ -16,6 +16,9 @@
   "engines": {
     "node": ">=20"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "agent-lingo": "./dist/cli.js",
     "codex-lingo": "./dist/codexLingo.js"
