@@ -132,7 +132,9 @@ bodies, prompts, tokens, or answers.
 - Translation support for `request_user_input` prompts and free-form answers. Secret answers are passed through.
 - Translator-only Codex threads are hidden from thread lists.
 
-The Codex app-server protocol is experimental. Compatibility is currently tested against `codex-cli 0.125.x`.
+The Codex app-server protocol is experimental. `agent-lingo` does not pin Codex CLI versions; it treats newer Codex
+versions optimistically, passes unknown protocol messages through, and warns only for observed failures or known-bad
+versions.
 
 ## Roadmap
 

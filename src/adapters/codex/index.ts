@@ -8,13 +8,15 @@ import {
   waitForTcp,
 } from "../../core/processes.js";
 import { JsonTranslationCache } from "../../translation/cache.js";
+import { codexCompatibilityWarning } from "./compatibility.js";
 import { startProxy } from "./proxy.js";
 import { CodexTranslator, getCodexVersion } from "./translator.js";
 
 export async function runCodexAdapter(config: CliConfig, cwd = process.cwd()): Promise<number> {
   const codexVersion = getCodexVersion(config.codexBin);
-  if (codexVersion && !codexVersion.includes("0.125.")) {
-    process.stderr.write(`[agent-lingo] warning: tested with codex-cli 0.125.x, current is ${codexVersion}\n`);
+  const compatibilityWarning = codexCompatibilityWarning(codexVersion);
+  if (compatibilityWarning) {
+    process.stderr.write(`${compatibilityWarning}\n`);
   }
 
   const upstreamPort = await findOpenPort();
