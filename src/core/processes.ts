@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import net from "node:net";
+import { AgentLingoError } from "./types.js";
 
 export async function findOpenPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -41,6 +42,48 @@ export function spawnManaged(
   });
 }
 
+export function waitForProcessReady(child: ChildProcess, ready: Promise<void>, command: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      child.off("error", onError);
+      child.off("close", onClose);
+    };
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const onError = (error: Error) => {
+      settle(() => reject(spawnError(command, error)));
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      settle(() =>
+        reject(new AgentLingoError(`${command} exited before becoming ready: ${exitDescription(code, signal)}`)),
+      );
+    };
+
+    child.once("error", onError);
+    child.once("close", onClose);
+    ready.then(
+      () => settle(resolve),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+}
+
+export function waitForProcessExit(child: ChildProcess, command: string): Promise<number | null> {
+  return new Promise<number | null>((resolve, reject) => {
+    child.once("error", (error) =>
+      reject(spawnError(command, error instanceof Error ? error : new Error(String(error)))),
+    );
+    child.once("close", resolve);
+  });
+}
+
 export function terminate(child: ChildProcess | undefined): void {
   if (!child || child.killed || child.exitCode !== null) {
     return;
@@ -51,6 +94,17 @@ export function terminate(child: ChildProcess | undefined): void {
       child.kill("SIGKILL");
     }
   }, 2_000).unref();
+}
+
+function spawnError(command: string, error: Error): AgentLingoError {
+  return new AgentLingoError(`Failed to start ${command}: ${error.message}`);
+}
+
+function exitDescription(code: number | null, signal: NodeJS.Signals | null): string {
+  if (signal) {
+    return `signal ${signal}`;
+  }
+  return `exit code ${String(code)}`;
 }
 
 function canConnect(port: number): Promise<boolean> {

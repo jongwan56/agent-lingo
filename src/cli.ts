@@ -4,11 +4,10 @@ import { resolveCliArgs } from "./core/config.js";
 import { runConfigCommand } from "./core/configCommand.js";
 import { isMainModule } from "./core/entrypoint.js";
 import { AgentLingoError } from "./core/types.js";
-
-const version = "0.1.1";
+import { packageVersion } from "./core/version.js";
 
 export async function main(argv = process.argv.slice(2), env = process.env): Promise<number> {
-  const parsed = resolveCliArgs(argv, env, version);
+  const parsed = resolveCliArgs(argv, env, packageVersion);
   if (parsed.kind === "help" || parsed.kind === "version") {
     process.stdout.write(`${parsed.text}\n`);
     return 0;

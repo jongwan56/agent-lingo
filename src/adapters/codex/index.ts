@@ -1,5 +1,12 @@
 import type { CliConfig } from "../../core/config.js";
-import { findOpenPort, spawnManaged, terminate, waitForTcp } from "../../core/processes.js";
+import {
+  findOpenPort,
+  spawnManaged,
+  terminate,
+  waitForProcessExit,
+  waitForProcessReady,
+  waitForTcp,
+} from "../../core/processes.js";
 import { JsonTranslationCache } from "../../translation/cache.js";
 import { startProxy } from "./proxy.js";
 import { CodexTranslator, getCodexVersion } from "./translator.js";
@@ -25,7 +32,12 @@ export async function runCodexAdapter(config: CliConfig, cwd = process.cwd()): P
     }
   });
 
-  await waitForTcp(upstreamPort);
+  try {
+    await waitForProcessReady(upstream, waitForTcp(upstreamPort), `${config.codexBin} app-server`);
+  } catch (error) {
+    terminate(upstream);
+    throw error;
+  }
 
   const translator = new CodexTranslator({
     workspace: cwd,
@@ -65,7 +77,11 @@ export async function runCodexAdapter(config: CliConfig, cwd = process.cwd()): P
   process.once("SIGINT", () => void cleanup().then(() => process.exit(130)));
   process.once("SIGTERM", () => void cleanup().then(() => process.exit(143)));
 
-  const exitCode = await new Promise<number | null>((resolve) => tui.on("close", resolve));
-  await cleanup();
+  let exitCode: number | null;
+  try {
+    exitCode = await waitForProcessExit(tui, config.codexBin);
+  } finally {
+    await cleanup();
+  }
   return exitCode ?? 0;
 }

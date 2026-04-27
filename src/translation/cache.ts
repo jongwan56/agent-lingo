@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { TranslationCache, TranslationCacheScope } from "../core/types.js";
 import { defaultStateDir, hashText } from "./state.js";
@@ -89,8 +89,8 @@ export class JsonTranslationCache implements TranslationCache {
   }
 
   private async load(): Promise<CacheFile> {
-    try {
-      const parsed = JSON.parse(await readFile(this.path, "utf8")) as Partial<CacheFile>;
+    const parsed = await this.readCacheFile();
+    if (parsed) {
       return {
         version: 1,
         workspace: parsed.workspace ?? this.workspace,
@@ -99,17 +99,16 @@ export class JsonTranslationCache implements TranslationCache {
         createdAt: parsed.createdAt ?? new Date().toISOString(),
         updatedAt: parsed.updatedAt ?? new Date().toISOString(),
       };
-    } catch {
-      const now = new Date().toISOString();
-      return {
-        version: 1,
-        workspace: this.workspace,
-        languagePairKey: this.languagePairKey,
-        entries: {},
-        createdAt: now,
-        updatedAt: now,
-      };
     }
+    const now = new Date().toISOString();
+    return {
+      version: 1,
+      workspace: this.workspace,
+      languagePairKey: this.languagePairKey,
+      entries: {},
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   private async save(file: CacheFile): Promise<void> {
@@ -124,9 +123,43 @@ export class JsonTranslationCache implements TranslationCache {
   private textKey(kind: CacheEntry["kind"], source: string): string {
     return `${kind}:text:${hashText(source)}`;
   }
+
+  private async readCacheFile(): Promise<Partial<CacheFile> | undefined> {
+    let content: string;
+    try {
+      content = await readFile(this.path, "utf8");
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    }
+
+    try {
+      return JSON.parse(content) as Partial<CacheFile>;
+    } catch {
+      await quarantineCorruptFile(this.path, "translation cache");
+      return undefined;
+    }
+  }
 }
 
 export function translationCachePath(workspace: string, languagePairKey: string, stateDir?: string): string {
   const workspaceHash = hashText(`${workspace}:${languagePairKey}`).slice(0, 24);
   return join(defaultStateDir(stateDir), "translations", `${workspaceHash}.json`);
+}
+
+async function quarantineCorruptFile(path: string, label: string): Promise<void> {
+  const quarantinePath = `${path}.${new Date().toISOString().replace(/[:.]/g, "-")}.corrupt.json`;
+  try {
+    await rename(path, quarantinePath);
+    process.stderr.write(`[agent-lingo] warning: quarantined corrupt ${label} file: ${quarantinePath}\n`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[agent-lingo] warning: failed to quarantine corrupt ${label} file ${path}: ${message}\n`);
+  }
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
