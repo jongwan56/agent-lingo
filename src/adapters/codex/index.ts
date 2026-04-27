@@ -19,6 +19,20 @@ export async function runCodexAdapter(config: CliConfig, cwd = process.cwd()): P
     process.stderr.write(`${compatibilityWarning}\n`);
   }
 
+  try {
+    return await runProxiedCodex(config, cwd, codexVersion);
+  } catch (error) {
+    if (!config.fallbackToAgent) {
+      throw error;
+    }
+    process.stderr.write(
+      `[agent-lingo] warning: could not start agent-lingo Codex proxy; falling back to the agent CLI directly: ${errorMessage(error)}\n`,
+    );
+    return runCodexDirectly(config, cwd);
+  }
+}
+
+async function runProxiedCodex(config: CliConfig, cwd: string, codexVersion: string | null): Promise<number> {
   const upstreamPort = await findOpenPort();
   const proxyPort = await findOpenPort();
   const upstreamUrl = `ws://127.0.0.1:${upstreamPort}`;
@@ -86,4 +100,16 @@ export async function runCodexAdapter(config: CliConfig, cwd = process.cwd()): P
     await cleanup();
   }
   return exitCode ?? 0;
+}
+
+async function runCodexDirectly(config: CliConfig, cwd: string): Promise<number> {
+  const codex = spawnManaged(config.codexBin, config.adapterArgs, {
+    cwd,
+    inheritStdio: true,
+  });
+  return (await waitForProcessExit(codex, config.codexBin)) ?? 0;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

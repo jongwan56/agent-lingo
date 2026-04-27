@@ -18,6 +18,7 @@ describe("CLI config", () => {
         "--state-dir",
         "/tmp/state",
         "--debug-protocol",
+        "--fallback-to-agent",
         "--",
         "-m",
         "gpt-5.4",
@@ -36,6 +37,7 @@ describe("CLI config", () => {
     expect(parsed.config.translatorModel).toBe("gpt-test");
     expect(parsed.config.stateDir).toBe("/tmp/state");
     expect(parsed.config.debugProtocol).toBe(true);
+    expect(parsed.config.fallbackToAgent).toBe(true);
     expect(parsed.config.adapterArgs).toEqual(["-m", "gpt-5.4"]);
   });
 

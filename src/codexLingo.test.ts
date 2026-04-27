@@ -5,6 +5,7 @@ describe("codex-lingo alias args", () => {
   test("launches the Codex adapter with bypass approvals and sandbox by default", () => {
     expect(codexLingoArgs(["-m", "gpt-5.4"])).toEqual([
       "codex",
+      "--fallback-to-agent",
       "--",
       "--dangerously-bypass-approvals-and-sandbox",
       "-m",
@@ -15,6 +16,7 @@ describe("codex-lingo alias args", () => {
   test("does not duplicate the bypass flag", () => {
     expect(codexLingoArgs(["--dangerously-bypass-approvals-and-sandbox", "-m", "gpt-5.4"])).toEqual([
       "codex",
+      "--fallback-to-agent",
       "--",
       "--dangerously-bypass-approvals-and-sandbox",
       "-m",

@@ -9,7 +9,7 @@ export function codexLingoArgs(codexArgs: string[]): string[] {
   const adapterArgs = codexArgs.includes(bypassApprovalsAndSandbox)
     ? codexArgs
     : [bypassApprovalsAndSandbox, ...codexArgs];
-  return ["codex", "--", ...adapterArgs];
+  return ["codex", "--fallback-to-agent", "--", ...adapterArgs];
 }
 
 if (isMainModule(import.meta.url, process.argv[1])) {

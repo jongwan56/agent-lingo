@@ -13,6 +13,7 @@ export type CliConfig = {
   stateDir?: string;
   configPath: string;
   debugProtocol: boolean;
+  fallbackToAgent: boolean;
   adapterArgs: string[];
 };
 
@@ -44,6 +45,7 @@ type CliOptionState = {
   stateDir?: string;
   configPath?: string;
   debugProtocol: boolean;
+  fallbackToAgent: boolean;
 };
 
 export type GlobalConfig = {
@@ -117,6 +119,7 @@ export function parseCliArgs(
       stateDir: options.stateDir ?? env.AGENT_LINGO_STATE_DIR ?? globalConfig.stateDir,
       configPath: options.configPath ?? resolvedConfigPath,
       debugProtocol: options.debugProtocol || globalConfig.debugProtocol === true,
+      fallbackToAgent: options.fallbackToAgent,
       adapterArgs,
     },
   };
@@ -135,6 +138,7 @@ Options:
   --state-dir <path>         State directory.
   --config <path>            Global JSON config path.
   --debug-protocol           Log protocol method routing without message bodies.
+  --fallback-to-agent        Run the agent CLI directly if agent-lingo cannot start.
   --help                     Show this help.
   --version                  Show the package version.`;
 }
@@ -151,11 +155,15 @@ Keys:
 }
 
 function parseOptions(args: string[]): CliOptionState {
-  const options: CliOptionState = { debugProtocol: false };
+  const options: CliOptionState = { debugProtocol: false, fallbackToAgent: false };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--debug-protocol") {
       options.debugProtocol = true;
+      continue;
+    }
+    if (arg === "--fallback-to-agent") {
+      options.fallbackToAgent = true;
       continue;
     }
     if (arg === "--user-language") {

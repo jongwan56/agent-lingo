@@ -27,10 +27,14 @@ codex-lingo -s workspace-write
 act without approval prompts. If you want to choose Codex sandbox and approval flags yourself, use the explicit
 `agent-lingo codex -- ...` form instead.
 
+If the `agent-lingo` proxy cannot start, `codex-lingo` prints a warning and falls back to running the underlying Codex
+CLI with the same Codex arguments. Translation will not be active in that fallback session.
+
 Use `agent-lingo` for configuration and explicit adapter invocation:
 
 ```sh
 agent-lingo codex --user-language ko --agent-language en -- -m gpt-5.4 -s workspace-write
+agent-lingo codex --fallback-to-agent -- -m gpt-5.4
 ```
 
 Agent Lingo options come before `--`. Codex options come after `--`.
@@ -39,6 +43,8 @@ Agent Lingo options come before `--`. Codex options come after `--`.
 agent-lingo codex --user-language es --agent-language en -- --debug
 agent-lingo codex --debug-protocol -- --model gpt-5.4
 ```
+
+Use `--fallback-to-agent` with the explicit adapter form to run the agent CLI directly when the proxy cannot start.
 
 ## Configuration
 
