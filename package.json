@@ -2,6 +2,7 @@
   "name": "agent-lingo",
   "version": "0.1.1",
   "description": "Language proxy for coding-agent CLIs.",
+  "keywords": ["codex", "codex-cli", "agent", "ai-agent", "cli", "translation", "localization", "developer-tools"],
   "type": "module",
   "license": "MIT",
   "author": "Jongwan Lee <jongwan56@gmail.com>",
