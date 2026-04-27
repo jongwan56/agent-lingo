@@ -133,6 +133,87 @@ describe("Codex websocket proxy", () => {
     await closeServer(upstream);
   });
 
+  test("scopes thread list requests to the current workspace by default", async () => {
+    const upstreamPort = await findOpenPort();
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
+    const received = new Promise<JsonObject>((resolve) => {
+      upstream.once("connection", (socket) => {
+        socket.once("message", (data) => resolve(parseObject(data.toString("utf8"))));
+      });
+    });
+
+    const proxyPort = await findOpenPort();
+    const proxy = await startProxy({
+      listenPort: proxyPort,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      workspace: "/workspace/current",
+      translator: new MockTranslator(),
+      debug: false,
+    });
+
+    const client = new WebSocket(proxy.url);
+    await onceOpen(client);
+    client.send(
+      JSON.stringify({
+        id: 2,
+        method: "thread/list",
+        params: {
+          limit: 20,
+        },
+      }),
+    );
+
+    const message = await received;
+    const params = objectValue(message.params);
+    expect(params.cwd).toBe("/workspace/current");
+    expect(params.limit).toBe(20);
+
+    client.terminate();
+    await proxy.close();
+    await closeServer(upstream);
+  });
+
+  test("preserves explicit thread list cwd filters", async () => {
+    const upstreamPort = await findOpenPort();
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
+    const received = new Promise<JsonObject>((resolve) => {
+      upstream.once("connection", (socket) => {
+        socket.once("message", (data) => resolve(parseObject(data.toString("utf8"))));
+      });
+    });
+
+    const proxyPort = await findOpenPort();
+    const proxy = await startProxy({
+      listenPort: proxyPort,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      workspace: "/workspace/current",
+      translator: new MockTranslator(),
+      debug: false,
+    });
+
+    const client = new WebSocket(proxy.url);
+    await onceOpen(client);
+    client.send(
+      JSON.stringify({
+        id: 3,
+        method: "thread/list",
+        params: {
+          cwd: null,
+          limit: 20,
+        },
+      }),
+    );
+
+    const message = await received;
+    const params = objectValue(message.params);
+    expect(params.cwd).toBeNull();
+    expect(params.limit).toBe(20);
+
+    client.terminate();
+    await proxy.close();
+    await closeServer(upstream);
+  });
+
   test("acknowledges turn/start immediately and forwards translated text upstream later", async () => {
     const upstreamPort = await findOpenPort();
     const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });

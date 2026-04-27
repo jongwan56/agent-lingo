@@ -68,6 +68,7 @@ async function runProxiedCodex(config: CliConfig, cwd: string, codexVersion: str
   const proxy = await startProxy({
     listenPort: proxyPort,
     upstreamUrl,
+    workspace: cwd,
     translator,
     translationCache,
     debug: config.debugProtocol,

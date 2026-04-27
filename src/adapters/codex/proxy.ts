@@ -11,6 +11,7 @@ import {
 type ProxyOptions = {
   listenPort: number;
   upstreamUrl: string;
+  workspace?: string;
   translator: Translator;
   translationCache?: TranslationCache;
   translationTimeoutMs?: number;
@@ -68,6 +69,7 @@ export async function startProxy(options: ProxyOptions): Promise<RunningProxy> {
             data.toString("utf8"),
             options.translator,
             options.translationCache,
+            options.workspace,
             pendingMethods,
             userInputRequests,
             optimisticTurns,
@@ -175,6 +177,7 @@ async function transformClientFrame(
   frame: string,
   translator: Translator,
   translationCache: TranslationCache | undefined,
+  workspace: string | undefined,
   pendingMethods: Map<string | number, string>,
   userInputRequests: UserInputRequestContexts,
   optimisticTurns: OptimisticTurnState,
@@ -204,7 +207,25 @@ async function transformClientFrame(
     process.stderr.write(`[agent-lingo] client -> server ${message.method}\n`);
   }
   message = rewriteClientTurnIds(message, optimisticTurns);
+  message = withDefaultThreadListCwd(message, workspace);
   return [JSON.stringify(await transformClientToServer(message, translator, userInputRequests, translationCache))];
+}
+
+function withDefaultThreadListCwd(message: JsonRpcMessage, workspace: string | undefined): JsonRpcMessage {
+  if (message.method !== "thread/list" || !workspace) {
+    return message;
+  }
+  const params = message.params;
+  if (params && typeof params === "object" && !Array.isArray(params) && Object.hasOwn(params, "cwd")) {
+    return message;
+  }
+  return {
+    ...message,
+    params: {
+      ...(params && typeof params === "object" && !Array.isArray(params) ? params : {}),
+      cwd: workspace,
+    } as JsonObject,
+  };
 }
 
 async function transformServerFrame(
