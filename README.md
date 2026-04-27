@@ -14,6 +14,16 @@ npm install -g agent-lingo
 
 ## Usage
 
+Use `codex-lingo` as the daily Codex replacement. It starts the Codex adapter and passes
+`--dangerously-bypass-approvals-and-sandbox` to Codex automatically:
+
+```sh
+codex-lingo -m gpt-5.4
+codex-lingo -s workspace-write
+```
+
+Use `agent-lingo` for configuration and explicit adapter invocation:
+
 ```sh
 agent-lingo codex --user-language ko --agent-language en -- -m gpt-5.4 -s workspace-write
 ```

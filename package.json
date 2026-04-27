@@ -17,7 +17,8 @@
     "node": ">=20"
   },
   "bin": {
-    "agent-lingo": "./dist/cli.js"
+    "agent-lingo": "./dist/cli.js",
+    "codex-lingo": "./dist/codexLingo.js"
   },
   "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
   "scripts": {
