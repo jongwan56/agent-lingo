@@ -52,6 +52,47 @@ class HangingTranslator implements Translator {
   }
 }
 
+class DeferredTranslator implements Translator {
+  private markTranslationStarted: () => void = () => undefined;
+  private resolveTranslation: ((value: string) => void) | undefined;
+  readonly translationStarted = new Promise<void>((resolve) => {
+    this.markTranslationStarted = resolve;
+  });
+  readonly translation = new Promise<string>((resolve) => {
+    this.resolveTranslation = resolve;
+  });
+
+  async translate(direction: TranslationDirection, text: string): Promise<string> {
+    if (direction !== "user-to-agent") {
+      return `user:${text}`;
+    }
+    this.markTranslationStarted();
+    const translated = await this.translation;
+    return translated;
+  }
+
+  complete(translated: string): void {
+    this.resolveTranslation?.(translated);
+  }
+
+  async getTranslatorThreadIds(): Promise<Set<string>> {
+    return new Set();
+  }
+}
+
+class FailingTranslator implements Translator {
+  async translate(direction: TranslationDirection, text: string): Promise<string> {
+    if (direction === "user-to-agent") {
+      throw new Error("translator unavailable");
+    }
+    return text;
+  }
+
+  async getTranslatorThreadIds(): Promise<Set<string>> {
+    return new Set();
+  }
+}
+
 describe("Codex websocket proxy", () => {
   test("transforms client turn text before forwarding upstream", async () => {
     const upstreamPort = await findOpenPort();
@@ -86,6 +127,151 @@ describe("Codex websocket proxy", () => {
     const params = objectValue(message.params);
     const input = objectValue(Array.isArray(params.input) ? params.input[0] : undefined);
     expect(input.text).toBe("agent:Arregla el bug.");
+
+    client.terminate();
+    await proxy.close();
+    await closeServer(upstream);
+  });
+
+  test("acknowledges turn/start immediately and forwards translated text upstream later", async () => {
+    const upstreamPort = await findOpenPort();
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
+    const upstreamConnection = new Promise<WebSocket>((resolve) => {
+      upstream.once("connection", resolve);
+    });
+
+    const translator = new DeferredTranslator();
+    const proxyPort = await findOpenPort();
+    const proxy = await startProxy({
+      listenPort: proxyPort,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      translator,
+      debug: false,
+    });
+
+    const client = new WebSocket(proxy.url);
+    await onceOpen(client);
+    const upstreamSocket = await upstreamConnection;
+    const upstreamReceived: JsonObject[] = [];
+    upstreamSocket.on("message", (data) => upstreamReceived.push(parseObject(data.toString("utf8"))));
+
+    const clientReceived: JsonObject[] = [];
+    const firstClientMessage = new Promise<JsonObject>((resolve) => {
+      client.on("message", (data) => {
+        const message = parseObject(data.toString("utf8"));
+        clientReceived.push(message);
+        resolve(message);
+      });
+    });
+
+    client.send(
+      JSON.stringify({
+        id: 11,
+        method: "turn/start",
+        params: {
+          threadId: "thread",
+          input: [{ type: "text", text: "버그를 고쳐줘.", text_elements: [] }],
+        },
+      }),
+    );
+
+    await translator.translationStarted;
+    const immediate = await firstClientMessage;
+    expect(immediate.id).toBe(11);
+    const immediateTurn = objectValue(objectValue(immediate.result).turn);
+    const clientTurnId = stringValue(immediateTurn.id);
+    expect(immediateTurn.status).toBe("inProgress");
+    expect(upstreamReceived).toEqual([]);
+
+    translator.complete("Fix the bug.");
+    await waitFor(() => upstreamReceived.length === 1);
+    const upstreamMessage = upstreamReceived[0];
+    const upstreamParams = objectValue(upstreamMessage?.params);
+    const upstreamInput = objectValue(Array.isArray(upstreamParams.input) ? upstreamParams.input[0] : undefined);
+    expect(upstreamMessage?.id).toBe(11);
+    expect(upstreamInput.text).toBe("Fix the bug.");
+
+    upstreamSocket.send(
+      JSON.stringify({
+        id: 11,
+        result: {
+          turn: { id: "upstream-turn", items: [], status: "inProgress", error: null },
+        },
+      }),
+    );
+    upstreamSocket.send(
+      JSON.stringify({
+        method: "turn/started",
+        params: {
+          threadId: "thread",
+          turn: { id: "upstream-turn", items: [], status: "inProgress", error: null },
+        },
+      }),
+    );
+    upstreamSocket.send(
+      JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId: "thread",
+          turnId: "upstream-turn",
+          item: {
+            type: "userMessage",
+            id: "user-item",
+            content: [{ type: "text", text: "Fix the bug.", text_elements: [] }],
+          },
+        },
+      }),
+    );
+
+    await waitFor(() => clientReceived.some((message) => message.method === "item/completed"));
+    const duplicateResponses = clientReceived.filter((message) => message.id === 11);
+    expect(duplicateResponses).toHaveLength(1);
+    expect(clientReceived.some((message) => message.method === "turn/started")).toBe(true);
+    const completed = objectValue(clientReceived.find((message) => message.method === "item/completed"));
+    const completedParams = objectValue(completed.params);
+    expect(completedParams.turnId).toBe(clientTurnId);
+
+    client.terminate();
+    await proxy.close();
+    await closeServer(upstream);
+  });
+
+  test("completes optimistic turn when input translation fails", async () => {
+    const upstreamPort = await findOpenPort();
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
+
+    const proxyPort = await findOpenPort();
+    const proxy = await startProxy({
+      listenPort: proxyPort,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      translator: new FailingTranslator(),
+      debug: false,
+    });
+
+    const client = new WebSocket(proxy.url);
+    await onceOpen(client);
+
+    const clientReceived: JsonObject[] = [];
+    client.on("message", (data) => {
+      clientReceived.push(parseObject(data.toString("utf8")));
+    });
+
+    client.send(
+      JSON.stringify({
+        id: 12,
+        method: "turn/start",
+        params: {
+          threadId: "thread",
+          input: [{ type: "text", text: "버그를 고쳐줘.", text_elements: [] }],
+        },
+      }),
+    );
+
+    await waitFor(() => clientReceived.some((message) => message.method === "error"));
+    const completed = objectValue(clientReceived.find((message) => message.method === "turn/completed"));
+    const completedTurn = objectValue(objectValue(completed.params).turn);
+    expect(completedTurn.status).toBe("failed");
+    expect(stringValue(objectValue(completedTurn.error).message)).toContain("Translation failed");
 
     client.terminate();
     await proxy.close();
@@ -286,4 +472,14 @@ function closeServer(server: WebSocketServer): Promise<void> {
 
 function parseObject(frame: string): JsonObject {
   return objectValue(JSON.parse(frame) as unknown);
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 1000) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }

@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
-import type { JsonRpcMessage, TranslationCache, Translator } from "../../core/types.js";
+import type { JsonObject, JsonRpcMessage, TranslationCache, Translator } from "../../core/types.js";
 import {
   type UserInputRequestContexts,
   transformClientToServer,
@@ -21,6 +22,18 @@ export type RunningProxy = {
   close(): Promise<void>;
 };
 
+type OptimisticTurn = {
+  requestId: string | number;
+  threadId: string;
+  clientTurnId: string;
+};
+
+type OptimisticTurnState = {
+  pendingByRequestId: Map<string | number, OptimisticTurn>;
+  upstreamToClientTurnIds: Map<string, string>;
+  clientToUpstreamTurnIds: Map<string, string>;
+};
+
 export async function startProxy(options: ProxyOptions): Promise<RunningProxy> {
   const server = http.createServer();
   const wss = new WebSocketServer({ server });
@@ -30,6 +43,11 @@ export async function startProxy(options: ProxyOptions): Promise<RunningProxy> {
     const pendingMethods = new Map<string | number, string>();
     const userInputRequests: UserInputRequestContexts = new Map();
     const pendingTranslationTurns = new Map<string, Promise<void>>();
+    const optimisticTurns: OptimisticTurnState = {
+      pendingByRequestId: new Map(),
+      upstreamToClientTurnIds: new Map(),
+      clientToUpstreamTurnIds: new Map(),
+    };
     let clientQueue = Promise.resolve();
     let serverQueue = Promise.resolve();
 
@@ -52,9 +70,13 @@ export async function startProxy(options: ProxyOptions): Promise<RunningProxy> {
             options.translationCache,
             pendingMethods,
             userInputRequests,
+            optimisticTurns,
+            (message) => sendWhenOpen(client, JSON.stringify(message), false),
             options.debug,
           );
-          sendWhenOpen(upstream, transformed, false);
+          for (const frame of transformed) {
+            sendWhenOpen(upstream, frame, false);
+          }
         })
         .catch((error) => sendProxyError(client, error));
     });
@@ -73,6 +95,7 @@ export async function startProxy(options: ProxyOptions): Promise<RunningProxy> {
             pendingMethods,
             userInputRequests,
             pendingTranslationTurns,
+            optimisticTurns,
             (message) => sendWhenOpen(client, JSON.stringify(message), false),
             options.translationTimeoutMs,
             options.debug,
@@ -154,16 +177,34 @@ async function transformClientFrame(
   translationCache: TranslationCache | undefined,
   pendingMethods: Map<string | number, string>,
   userInputRequests: UserInputRequestContexts,
+  optimisticTurns: OptimisticTurnState,
+  emit: (message: JsonRpcMessage) => void,
   debug: boolean,
-): Promise<string> {
-  const message = parseJsonRpcFrame(frame);
+): Promise<string[]> {
+  let message = parseJsonRpcFrame(frame);
   if (message.id !== undefined && message.id !== null && typeof message.method === "string") {
+    // Keep the TUI responsive while the translated turn is still waiting to be forwarded upstream.
+    const optimisticTurn = maybeAcknowledgeTurnStart(message, optimisticTurns, emit);
+    if (optimisticTurn) {
+      if (debug && message.method) {
+        process.stderr.write(`[agent-lingo] client -> server ${message.method}\n`);
+      }
+      try {
+        const transformed = await transformClientToServer(message, translator, userInputRequests, translationCache);
+        return [JSON.stringify(rewriteClientTurnIds(transformed, optimisticTurns))];
+      } catch (error) {
+        optimisticTurns.pendingByRequestId.delete(optimisticTurn.requestId);
+        emit(createFailedTurnCompleted(optimisticTurn));
+        throw error;
+      }
+    }
     pendingMethods.set(message.id, message.method);
   }
   if (debug && message.method) {
     process.stderr.write(`[agent-lingo] client -> server ${message.method}\n`);
   }
-  return JSON.stringify(await transformClientToServer(message, translator, userInputRequests, translationCache));
+  message = rewriteClientTurnIds(message, optimisticTurns);
+  return [JSON.stringify(await transformClientToServer(message, translator, userInputRequests, translationCache))];
 }
 
 async function transformServerFrame(
@@ -173,13 +214,22 @@ async function transformServerFrame(
   pendingMethods: Map<string | number, string>,
   userInputRequests: UserInputRequestContexts,
   pendingTranslationTurns: Map<string, Promise<void>>,
+  optimisticTurns: OptimisticTurnState,
   emit: (message: JsonRpcMessage) => void,
   translationTimeoutMs: number | undefined,
   debug: boolean,
 ): Promise<string[]> {
-  const message = parseJsonRpcFrame(frame);
+  const parsed = parseJsonRpcFrame(frame);
+  const optimisticResponse = handleOptimisticTurnStartResponse(parsed, optimisticTurns);
+  if (optimisticResponse === "drop") {
+    return [];
+  }
+  const message = optimisticResponse ?? rewriteUpstreamTurnIds(parsed, optimisticTurns);
   if (debug && message.method) {
     process.stderr.write(`[agent-lingo] server -> client ${message.method}\n`);
+  }
+  if (isDuplicateOptimisticTurnStarted(parsed, optimisticTurns)) {
+    return [];
   }
   const pendingTurnKey = turnKeyFromMessage(message);
   if (pendingTurnKey) {
@@ -199,6 +249,173 @@ async function transformServerFrame(
     translationTimeoutMs,
   });
   return (Array.isArray(transformed) ? transformed : [transformed]).map((entry) => JSON.stringify(entry));
+}
+
+function maybeAcknowledgeTurnStart(
+  message: JsonRpcMessage,
+  optimisticTurns: OptimisticTurnState,
+  emit: (message: JsonRpcMessage) => void,
+): OptimisticTurn | undefined {
+  if (message.method !== "turn/start" || message.id === undefined || message.id === null) {
+    return undefined;
+  }
+  const params = asObject(message.params);
+  const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+  if (!threadId || !hasTextInput(params?.input)) {
+    return undefined;
+  }
+
+  const clientTurnId = randomUUID();
+  const optimisticTurn = {
+    requestId: message.id,
+    threadId,
+    clientTurnId,
+  };
+  optimisticTurns.pendingByRequestId.set(message.id, optimisticTurn);
+
+  emit({
+    id: message.id,
+    result: {
+      turn: createTurn(clientTurnId, null),
+    },
+  });
+  emit({
+    method: "turn/started",
+    params: {
+      threadId,
+      turn: createTurn(clientTurnId, Math.floor(Date.now() / 1000)),
+    },
+  });
+  return optimisticTurn;
+}
+
+function handleOptimisticTurnStartResponse(
+  message: JsonRpcMessage,
+  optimisticTurns: OptimisticTurnState,
+): JsonRpcMessage | "drop" | undefined {
+  if (message.id === undefined || message.id === null) {
+    return undefined;
+  }
+  const optimisticTurn = optimisticTurns.pendingByRequestId.get(message.id);
+  if (!optimisticTurn) {
+    return undefined;
+  }
+  optimisticTurns.pendingByRequestId.delete(message.id);
+
+  const upstreamTurn = asObject(asObject(message.result)?.turn);
+  const upstreamTurnId = typeof upstreamTurn?.id === "string" ? upstreamTurn.id : undefined;
+  if (!upstreamTurnId) {
+    const detail = message.error ? "upstream returned an error" : "upstream response did not include a turn id";
+    return {
+      method: "error",
+      params: {
+        message: `agent-lingo proxy error: turn/start failed after local acknowledgement: ${detail}`,
+      },
+    };
+  }
+
+  optimisticTurns.upstreamToClientTurnIds.set(
+    turnKey(optimisticTurn.threadId, upstreamTurnId),
+    optimisticTurn.clientTurnId,
+  );
+  optimisticTurns.clientToUpstreamTurnIds.set(
+    turnKey(optimisticTurn.threadId, optimisticTurn.clientTurnId),
+    upstreamTurnId,
+  );
+  return "drop";
+}
+
+function rewriteClientTurnIds(message: JsonRpcMessage, optimisticTurns: OptimisticTurnState): JsonRpcMessage {
+  return rewriteTurnIds(message, optimisticTurns.clientToUpstreamTurnIds);
+}
+
+function rewriteUpstreamTurnIds(message: JsonRpcMessage, optimisticTurns: OptimisticTurnState): JsonRpcMessage {
+  return rewriteTurnIds(message, optimisticTurns.upstreamToClientTurnIds);
+}
+
+function rewriteTurnIds(message: JsonRpcMessage, turnIds: Map<string, string>): JsonRpcMessage {
+  const params = asObject(message.params);
+  if (!params) {
+    return message;
+  }
+  const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
+  if (!threadId) {
+    return message;
+  }
+
+  let rewrittenParams: JsonObject | undefined;
+  const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+  if (turnId) {
+    const mapped = turnIds.get(turnKey(threadId, turnId));
+    if (mapped) {
+      rewrittenParams = { ...(params as JsonObject), turnId: mapped };
+    }
+  }
+
+  const turn = asObject(params.turn);
+  if (typeof turn?.id === "string") {
+    const mapped = turnIds.get(turnKey(threadId, turn.id));
+    if (mapped) {
+      rewrittenParams = {
+        ...((rewrittenParams ?? params) as JsonObject),
+        turn: {
+          ...(turn as JsonObject),
+          id: mapped,
+        },
+      };
+    }
+  }
+
+  return rewrittenParams ? { ...message, params: rewrittenParams } : message;
+}
+
+function isDuplicateOptimisticTurnStarted(message: JsonRpcMessage, optimisticTurns: OptimisticTurnState): boolean {
+  if (message.method !== "turn/started") {
+    return false;
+  }
+  const params = asObject(message.params);
+  const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+  const turn = asObject(params?.turn);
+  const turnId = typeof turn?.id === "string" ? turn.id : undefined;
+  return Boolean(threadId && turnId && optimisticTurns.upstreamToClientTurnIds.has(turnKey(threadId, turnId)));
+}
+
+function hasTextInput(input: unknown): boolean {
+  return (
+    Array.isArray(input) &&
+    input.some((item) => {
+      const inputItem = asObject(item);
+      return inputItem?.type === "text" && typeof inputItem.text === "string";
+    })
+  );
+}
+
+function createTurn(id: string, startedAt: number | null): JsonObject {
+  return {
+    id,
+    items: [],
+    status: "inProgress",
+    error: null,
+    startedAt,
+    completedAt: null,
+    durationMs: null,
+  };
+}
+
+function createFailedTurnCompleted(optimisticTurn: OptimisticTurn): JsonRpcMessage {
+  return {
+    method: "turn/completed",
+    params: {
+      threadId: optimisticTurn.threadId,
+      turn: {
+        ...createTurn(optimisticTurn.clientTurnId, null),
+        status: "failed",
+        error: {
+          message: "Translation failed before the turn was forwarded.",
+        },
+      },
+    },
+  };
 }
 
 async function waitForPendingTranslation(
