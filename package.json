@@ -1,0 +1,42 @@
+{
+  "name": "agent-lingo",
+  "version": "0.1.0",
+  "description": "Language proxy for coding-agent CLIs.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Jongwan Lee <jongwan56@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jongwan56/agent-lingo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jongwan56/agent-lingo/issues"
+  },
+  "homepage": "https://github.com/jongwan56/agent-lingo#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "agent-lingo": "./dist/cli.js"
+  },
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check": "bun run typecheck && bun run lint && bun test && bun run build",
+    "prepack": "bun run check"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "^1.3.13",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.8.0"
+  }
+}
