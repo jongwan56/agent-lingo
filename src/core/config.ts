@@ -18,8 +18,23 @@ export type CliConfig = {
 
 export type CliParseResult =
   | { kind: "run"; config: CliConfig }
+  | { kind: "config"; command: ConfigCommand }
   | { kind: "help"; text: string }
   | { kind: "version"; text: string };
+
+export type ConfigKey =
+  | "userLanguage"
+  | "agentLanguage"
+  | "codexBin"
+  | "translatorModel"
+  | "stateDir"
+  | "debugProtocol";
+
+export type ConfigCommand =
+  | { action: "path"; configPath: string }
+  | { action: "get"; configPath: string; key?: ConfigKey }
+  | { action: "set"; configPath: string; key: ConfigKey; value: string }
+  | { action: "unset"; configPath: string; key: ConfigKey };
 
 type CliOptionState = {
   userLanguage?: string;
@@ -31,7 +46,7 @@ type CliOptionState = {
   debugProtocol: boolean;
 };
 
-type GlobalConfig = {
+export type GlobalConfig = {
   userLanguage?: string;
   agentLanguage?: string;
   codexBin?: string;
@@ -70,6 +85,9 @@ export function parseCliArgs(
   if (command === "--version" || command === "-v") {
     return { kind: "version", text: version };
   }
+  if (command === "config") {
+    return { kind: "config", command: parseConfigCommand(rest, env) };
+  }
   if (command !== "codex") {
     throw new AgentLingoError(`Unknown adapter: ${command}\n\n${usage()}`);
   }
@@ -107,6 +125,7 @@ export function parseCliArgs(
 export function usage(): string {
   return `Usage:
   agent-lingo codex [agent-lingo options] -- [codex options]
+  agent-lingo config [--config <path>] <path|get|set|unset>
 
 Options:
   --user-language <tag>      User input/display language as a BCP-47 tag.
@@ -118,6 +137,17 @@ Options:
   --debug-protocol           Log protocol method routing without message bodies.
   --help                     Show this help.
   --version                  Show the package version.`;
+}
+
+export function configUsage(): string {
+  return `Usage:
+  agent-lingo config [--config <path>] path
+  agent-lingo config [--config <path>] get [key]
+  agent-lingo config [--config <path>] set <key> <value>
+  agent-lingo config [--config <path>] unset <key>
+
+Keys:
+  userLanguage, agentLanguage, codexBin, translatorModel, stateDir, debugProtocol`;
 }
 
 function parseOptions(args: string[]): CliOptionState {
@@ -189,6 +219,74 @@ function shouldSkipConfigLoad(argv: string[]): boolean {
   );
 }
 
+function parseConfigCommand(args: string[], env: NodeJS.ProcessEnv): ConfigCommand {
+  const { configPath, positional } = parseConfigCommandArgs(args, env);
+  const [action, key, value, extra] = positional;
+  if (!action || action === "--help" || action === "-h") {
+    throw new AgentLingoError(configUsage());
+  }
+  if (action === "path") {
+    ensureNoExtraConfigArgs([key, value, extra], action);
+    return { action, configPath };
+  }
+  if (action === "get") {
+    ensureNoExtraConfigArgs([value, extra], action);
+    return key ? { action, configPath, key: parseConfigKey(key) } : { action, configPath };
+  }
+  if (action === "set") {
+    if (!key || value === undefined || extra !== undefined) {
+      throw new AgentLingoError(configUsage());
+    }
+    return { action, configPath, key: parseConfigKey(key), value };
+  }
+  if (action === "unset") {
+    if (!key || value !== undefined || extra !== undefined) {
+      throw new AgentLingoError(configUsage());
+    }
+    return { action, configPath, key: parseConfigKey(key) };
+  }
+  throw new AgentLingoError(`Unknown config action: ${action}\n\n${configUsage()}`);
+}
+
+function parseConfigCommandArgs(args: string[], env: NodeJS.ProcessEnv): { configPath: string; positional: string[] } {
+  let configPath = env.AGENT_LINGO_CONFIG ?? defaultConfigPath(env);
+  const positional: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--config") {
+      index += 1;
+      configPath = requireValue(args, index, arg);
+      continue;
+    }
+    positional.push(arg);
+  }
+  return { configPath, positional };
+}
+
+function ensureNoExtraConfigArgs(values: Array<string | undefined>, action: string): void {
+  if (values.some((value) => value !== undefined)) {
+    throw new AgentLingoError(`Too many arguments for config ${action}\n\n${configUsage()}`);
+  }
+}
+
+function parseConfigKey(value: string): ConfigKey {
+  if (isConfigKey(value)) {
+    return value;
+  }
+  throw new AgentLingoError(`Unknown config key: ${value}`);
+}
+
+export function isConfigKey(value: string): value is ConfigKey {
+  return (
+    value === "userLanguage" ||
+    value === "agentLanguage" ||
+    value === "codexBin" ||
+    value === "translatorModel" ||
+    value === "stateDir" ||
+    value === "debugProtocol"
+  );
+}
+
 function configuredConfigPath(argv: string[], env: NodeJS.ProcessEnv): { path: string; explicit: boolean } {
   const [command, ...rest] = argv;
   if (command !== "codex") {
@@ -207,11 +305,11 @@ function configuredConfigPath(argv: string[], env: NodeJS.ProcessEnv): { path: s
   return { path: defaultConfigPath(env), explicit: false };
 }
 
-function defaultConfigPath(env: NodeJS.ProcessEnv): string {
+export function defaultConfigPath(env: NodeJS.ProcessEnv): string {
   return join(env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "agent-lingo", "config.json");
 }
 
-function loadGlobalConfig(path: string, explicit: boolean): unknown {
+export function loadGlobalConfig(path: string, explicit: boolean): unknown {
   if (!existsSync(path)) {
     if (explicit) {
       throw new AgentLingoError(`Config file does not exist: ${path}`);
@@ -226,7 +324,7 @@ function loadGlobalConfig(path: string, explicit: boolean): unknown {
   }
 }
 
-function validateGlobalConfig(input: unknown): GlobalConfig {
+export function validateGlobalConfig(input: unknown): GlobalConfig {
   if (input === undefined || input === null) {
     return {};
   }

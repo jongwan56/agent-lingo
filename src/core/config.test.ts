@@ -154,4 +154,25 @@ describe("CLI config", () => {
     });
     expect(parseCliArgs(["codex", "--version"], {}, "0.1.0")).toEqual({ kind: "version", text: "0.1.0" });
   });
+
+  test("parses config subcommands", () => {
+    expect(parseCliArgs(["config", "--config", "/tmp/config.json", "set", "userLanguage", "ko"], {}, "0.1.0")).toEqual({
+      kind: "config",
+      command: {
+        action: "set",
+        configPath: "/tmp/config.json",
+        key: "userLanguage",
+        value: "ko",
+      },
+    });
+
+    expect(parseCliArgs(["config", "get", "agentLanguage"], {}, "0.1.0")).toEqual({
+      kind: "config",
+      command: {
+        action: "get",
+        configPath: expect.stringContaining("agent-lingo/config.json"),
+        key: "agentLanguage",
+      },
+    });
+  });
 });

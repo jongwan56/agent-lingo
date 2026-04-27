@@ -27,6 +27,15 @@ agent-lingo codex --debug-protocol -- --model gpt-5.4
 
 ## Configuration
 
+Set common values once with the config command:
+
+```sh
+agent-lingo config set userLanguage ko
+agent-lingo config set agentLanguage en
+agent-lingo config set codexBin codex
+agent-lingo config get
+```
+
 Agent Lingo reads a global JSON config file from:
 
 ```text
@@ -49,6 +58,12 @@ Example:
 ```
 
 Use `--config <path>` or `AGENT_LINGO_CONFIG` to load a different config file.
+
+```sh
+agent-lingo config --config ./agent-lingo.json set userLanguage es
+agent-lingo config --config ./agent-lingo.json path
+agent-lingo config unset translatorModel
+```
 
 - `AGENT_LINGO_USER_LANGUAGE`: BCP-47 language tag for the user's input and displayed translations.
 - `AGENT_LINGO_AGENT_LANGUAGE`: BCP-47 language tag sent to the agent.
