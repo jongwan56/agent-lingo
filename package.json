@@ -1,6 +1,6 @@
 {
   "name": "agent-lingo",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Language proxy for coding-agent CLIs.",
   "keywords": ["codex", "codex-cli", "agent", "ai-agent", "cli", "translation", "localization", "developer-tools"],
   "type": "module",

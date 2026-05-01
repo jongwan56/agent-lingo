@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.4
+
+- Scope Codex resume history to the current workspace.
 - Treat Codex resume history requests with `cwd: null` as current-workspace requests.
 
 ## 0.1.2
