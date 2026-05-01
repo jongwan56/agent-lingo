@@ -8,6 +8,12 @@
 - Do not use `npm`, `yarn`, or `pnpm`.
 - Do not create `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml`.
 
+## Releases
+
+- npm releases are published by `.github/workflows/release.yml`; do not run `bun publish` locally.
+- To prepare a release, update `package.json` and `CHANGELOG.md`, run `bun run check`, commit, and create the matching `vX.Y.Z` tag.
+- Do not push release commits or tags unless the user explicitly asks.
+
 ## Testing
 
 - Use TDD for behavior changes: write or update a failing test before implementation.
