@@ -216,7 +216,7 @@ function withDefaultThreadListCwd(message: JsonRpcMessage, workspace: string | u
     return message;
   }
   const params = message.params;
-  if (params && typeof params === "object" && !Array.isArray(params) && Object.hasOwn(params, "cwd")) {
+  if (params && typeof params === "object" && !Array.isArray(params) && typeof params.cwd === "string") {
     return message;
   }
   return {

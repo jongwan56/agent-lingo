@@ -173,7 +173,7 @@ describe("Codex websocket proxy", () => {
     await closeServer(upstream);
   });
 
-  test("preserves explicit thread list cwd filters", async () => {
+  test("scopes thread list requests with null cwd to the current workspace", async () => {
     const upstreamPort = await findOpenPort();
     const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
     const received = new Promise<JsonObject>((resolve) => {
@@ -206,7 +206,48 @@ describe("Codex websocket proxy", () => {
 
     const message = await received;
     const params = objectValue(message.params);
-    expect(params.cwd).toBeNull();
+    expect(params.cwd).toBe("/workspace/current");
+    expect(params.limit).toBe(20);
+
+    client.terminate();
+    await proxy.close();
+    await closeServer(upstream);
+  });
+
+  test("preserves explicit thread list cwd filters", async () => {
+    const upstreamPort = await findOpenPort();
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: upstreamPort });
+    const received = new Promise<JsonObject>((resolve) => {
+      upstream.once("connection", (socket) => {
+        socket.once("message", (data) => resolve(parseObject(data.toString("utf8"))));
+      });
+    });
+
+    const proxyPort = await findOpenPort();
+    const proxy = await startProxy({
+      listenPort: proxyPort,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      workspace: "/workspace/current",
+      translator: new MockTranslator(),
+      debug: false,
+    });
+
+    const client = new WebSocket(proxy.url);
+    await onceOpen(client);
+    client.send(
+      JSON.stringify({
+        id: 4,
+        method: "thread/list",
+        params: {
+          cwd: "/workspace/other",
+          limit: 20,
+        },
+      }),
+    );
+
+    const message = await received;
+    const params = objectValue(message.params);
+    expect(params.cwd).toBe("/workspace/other");
     expect(params.limit).toBe(20);
 
     client.terminate();

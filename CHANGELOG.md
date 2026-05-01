@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- Treat Codex resume history requests with `cwd: null` as current-workspace requests.
+
 ## 0.1.2
 
 - Acknowledge translated turns immediately while translation continues in the background.
